@@ -67,7 +67,7 @@ st.markdown(
 )
 
 # Header
-st.markdown('<div class="main-header">SAMBA — Lead-Lag Miner ETF Engine</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">Lead-Lag Miner ETF Engine</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="sub-header">Cross-Correlation · Granger Causality · VAR IRF · Transfer Entropy</div>',
     unsafe_allow_html=True,
