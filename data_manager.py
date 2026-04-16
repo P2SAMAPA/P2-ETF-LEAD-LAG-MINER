@@ -22,45 +22,97 @@ def load_master_data() -> pd.DataFrame:
 
 def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Convert timestamp to datetime, set index, sort, and compute log returns.
-    Handles various possible timestamp column names.
+    Convert timestamp index to datetime, sort, and compute log returns.
+    Expects the index to be UNIX milliseconds (values ~1.2e12).
     """
-    # Try to identify the timestamp column
-    possible_time_cols = ["__index_level_0__", "date", "timestamp", "time", "index"]
-    time_col = None
+    print("DataFrame columns:", df.columns.tolist())
+    print("DataFrame index dtype:", df.index.dtype)
+    print("DataFrame index sample (first 5):", df.index[:5].tolist() if len(df) > 0 else "empty")
 
+    # Strategy 1: Index is already datetime
+    if pd.api.types.is_datetime64_any_dtype(df.index):
+        print("Index is already datetime. Using as is.")
+        df = df.sort_index()
+        return compute_returns(df)
+
+    # Strategy 2: Index is numeric – convert based on magnitude
+    if pd.api.types.is_numeric_dtype(df.index):
+        sample_val = df.index[0] if len(df) > 0 else 0
+        if sample_val > 1e12:  # Nanoseconds
+            unit = "ns"
+        elif sample_val > 1e10:  # Milliseconds
+            unit = "ms"
+        elif sample_val > 1e9:   # Seconds
+            unit = "s"
+        else:
+            unit = None
+
+        if unit is not None:
+            print(f"Converting numeric index to datetime using unit='{unit}'.")
+            df.index = pd.to_datetime(df.index, unit=unit)
+            df = df.sort_index()
+            return compute_returns(df)
+
+    # Strategy 3: Look for a timestamp column if index isn't the timestamp
+    possible_time_cols = ["__index_level_0__", "date", "Date", "timestamp", "time", "index"]
+    time_col = None
     for col in possible_time_cols:
         if col in df.columns:
             time_col = col
             break
 
-    if time_col is None:
-        # If no timestamp column found, check if the index itself is a timestamp
-        if df.index.dtype.kind in "iuf" and df.index.min() > 1e9:
-            # Index looks like UNIX seconds
-            df.index = pd.to_datetime(df.index, unit="s")
-        else:
-            raise KeyError("No timestamp column found and index is not UNIX seconds.")
-    else:
-        # Convert the timestamp column to datetime and set as index
-        if df[time_col].dtype.kind in "iuf":
-            # Looks like UNIX timestamp
-            df["date"] = pd.to_datetime(df[time_col], unit="s")
+    if time_col is not None:
+        print(f"Found timestamp column: {time_col}")
+        # Convert to datetime
+        if pd.api.types.is_numeric_dtype(df[time_col]):
+            sample_val = df[time_col].iloc[0]
+            if sample_val > 1e12:
+                unit = "ns"
+            elif sample_val > 1e10:
+                unit = "ms"
+            elif sample_val > 1e9:
+                unit = "s"
+            else:
+                unit = None
+            if unit:
+                df["date"] = pd.to_datetime(df[time_col], unit=unit)
+            else:
+                df["date"] = pd.to_datetime(df[time_col])
         else:
             df["date"] = pd.to_datetime(df[time_col])
         df = df.set_index("date")
-        # Drop the original timestamp column if it's not needed
         if time_col != "date":
             df = df.drop(columns=[time_col])
+        df = df.sort_index()
+        return compute_returns(df)
 
-    df = df.sort_index()
+    # Strategy 4: Try parsing each column as datetime
+    for col in df.columns:
+        try:
+            converted = pd.to_datetime(df[col])
+            if converted.notna().all():
+                print(f"Column '{col}' can be parsed as datetime. Using it.")
+                df["date"] = converted
+                df = df.set_index("date")
+                df = df.drop(columns=[col])
+                df = df.sort_index()
+                return compute_returns(df)
+        except:
+            continue
 
-    # Compute daily log returns for all price columns (ETFs)
-    # Identify price columns as those that are not macro and not the date index
+    # If all strategies fail
+    raise KeyError(
+        f"Unable to locate date information. Columns: {df.columns.tolist()}, "
+        f"Index dtype: {df.index.dtype}, Index sample: {df.index[:5].tolist()}"
+    )
+
+
+def compute_returns(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute daily log returns for price columns (ETFs)."""
+    # Identify price columns as those not in MACRO_COLS
     price_cols = [col for col in df.columns if col not in config.MACRO_COLS]
     for col in price_cols:
         df[f"{col}_ret"] = np.log(df[col] / df[col].shift(1))
-
     return df
 
 
