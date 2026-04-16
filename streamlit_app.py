@@ -56,12 +56,6 @@ st.markdown(
         letter-spacing: -0.02em;
         color: #111827;
     }
-    .conviction {
-        font-size: 1.2rem;
-        color: #059669;
-        font-weight: 500;
-        margin: 0.3rem 0 0.5rem 0;
-    }
     .meta-text {
         color: #6B7280;
         font-size: 0.9rem;
@@ -248,16 +242,18 @@ def display_global_card(universe_data: dict):
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
 
-    # Top row: Ticker and meta
+    # Top row: Ticker and meta (no conviction, no 2nd/3rd placeholders)
     col1, col2 = st.columns([2, 1])
     with col1:
         st.markdown(f'<div class="ticker-large">{ticker}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="conviction">100.0% conviction</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="meta-text">Signal for {next_day.strftime("%Y-%m-%d")} · Generated {gen_time}</div>', unsafe_allow_html=True)
         st.markdown('<div class="source-badge">Source: Global Training</div>', unsafe_allow_html=True)
     with col2:
-        st.markdown('<div class="meta-text">2nd: — 0.0%</div>', unsafe_allow_html=True)
-        st.markdown('<div class="meta-text">3rd: — 0.0%</div>', unsafe_allow_html=True)
+        # Optional: if a score is ever added to the JSON, display it here
+        # e.g., lead_lag_score = global_data.get("lead_lag_score")
+        # if lead_lag_score is not None:
+        #     st.markdown(f'<div class="meta-text">Lead‑Lag Score: {lead_lag_score:.3f}</div>', unsafe_allow_html=True)
+        pass
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
@@ -287,12 +283,11 @@ def display_shrinking_card(universe_data: dict, universe_name: str):
     col1, col2 = st.columns([2, 1])
     with col1:
         st.markdown(f'<div class="ticker-large">{ticker}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="conviction">100.0% conviction</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="meta-text">Signal for {next_day.strftime("%Y-%m-%d")} · Generated {gen_time}</div>', unsafe_allow_html=True)
         st.markdown('<div class="source-badge">Source: Shrinking Window</div>', unsafe_allow_html=True)
     with col2:
-        st.markdown('<div class="meta-text">2nd: — 0.0%</div>', unsafe_allow_html=True)
-        st.markdown('<div class="meta-text">3rd: — 0.0%</div>', unsafe_allow_html=True)
+        # Optional score placeholder
+        pass
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
