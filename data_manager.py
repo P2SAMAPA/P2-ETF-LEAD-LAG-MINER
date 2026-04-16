@@ -21,16 +21,42 @@ def load_master_data() -> pd.DataFrame:
 
 
 def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Convert UNIX timestamp to datetime, set index, sort, and compute log returns."""
-    # Convert UNIX seconds to datetime
-    df["date"] = pd.to_datetime(df["__index_level_0__"], unit="s")
-    df = df.set_index("date").sort_index()
+    """
+    Convert timestamp to datetime, set index, sort, and compute log returns.
+    Handles various possible timestamp column names.
+    """
+    # Try to identify the timestamp column
+    possible_time_cols = ["__index_level_0__", "date", "timestamp", "time", "index"]
+    time_col = None
 
-    # Drop the index column
-    if "__index_level_0__" in df.columns:
-        df = df.drop(columns=["__index_level_0__"])
+    for col in possible_time_cols:
+        if col in df.columns:
+            time_col = col
+            break
+
+    if time_col is None:
+        # If no timestamp column found, check if the index itself is a timestamp
+        if df.index.dtype.kind in "iuf" and df.index.min() > 1e9:
+            # Index looks like UNIX seconds
+            df.index = pd.to_datetime(df.index, unit="s")
+        else:
+            raise KeyError("No timestamp column found and index is not UNIX seconds.")
+    else:
+        # Convert the timestamp column to datetime and set as index
+        if df[time_col].dtype.kind in "iuf":
+            # Looks like UNIX timestamp
+            df["date"] = pd.to_datetime(df[time_col], unit="s")
+        else:
+            df["date"] = pd.to_datetime(df[time_col])
+        df = df.set_index("date")
+        # Drop the original timestamp column if it's not needed
+        if time_col != "date":
+            df = df.drop(columns=[time_col])
+
+    df = df.sort_index()
 
     # Compute daily log returns for all price columns (ETFs)
+    # Identify price columns as those that are not macro and not the date index
     price_cols = [col for col in df.columns if col not in config.MACRO_COLS]
     for col in price_cols:
         df[f"{col}_ret"] = np.log(df[col] / df[col].shift(1))
