@@ -147,18 +147,18 @@ def aggregate_windows(windows: list) -> str:
         ret = w["metrics"].get("ann_return", 0.0)
         sharpe = w["metrics"].get("sharpe", 0.0)
         max_dd = w["metrics"].get("max_dd", -1.0)
+        hit_rate = w["metrics"].get("hit_rate", 0.0)
 
         if ret <= 0:
             weight = 0.0
         else:
-            # Normalize max_dd (less negative is better)
             dd_score = 1.0 / (1.0 + abs(max_dd))
             weight = (
                 config.WEIGHT_RETURN * ret
                 + config.WEIGHT_SHARPE * sharpe
+                + config.WEIGHT_HITRATE * hit_rate
                 + config.WEIGHT_MAXDD * dd_score
             )
-
         scores[ticker] = scores.get(ticker, 0.0) + weight
 
     if not scores:
