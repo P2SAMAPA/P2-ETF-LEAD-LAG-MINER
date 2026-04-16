@@ -1,73 +1,142 @@
 """
-Streamlit UI for Lead-Lag-Miner.
+Streamlit UI for Lead-Lag-Miner - Professional Styling with Weight Transparency
 """
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+import numpy as np
+from datetime import datetime, timedelta
 import config
 from push_results import load_latest_result
-from us_calendar import next_trading_day, is_trading_day
+from us_calendar import next_trading_day
 
 st.set_page_config(page_title="Lead-Lag Miner", layout="wide")
 
-# Custom CSS for light shading and clean style
+# ---------- Professional CSS (matching the example) ----------
 st.markdown(
     """
     <style>
+    /* Global font */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    html, body, [class*="css"]  {
+        font-family: 'Inter', sans-serif;
+    }
+
     .main-header {
         font-size: 2.5rem;
         font-weight: 600;
         margin-bottom: 0.2rem;
+        letter-spacing: -0.02em;
     }
     .sub-header {
         font-size: 1rem;
-        color: #555;
+        color: #6B7280;
         margin-bottom: 2rem;
+        font-weight: 400;
     }
+
+    /* Card container */
     .card {
-        background-color: #f8f9fa;
-        border-radius: 10px;
-        padding: 1.5rem;
+        background-color: #FFFFFF;
+        border-radius: 16px;
+        padding: 1.8rem 2rem;
         margin: 1rem 0;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        border: 1px solid #e9ecef;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+        border: 1px solid #F0F2F5;
+        transition: box-shadow 0.2s;
     }
+    .card:hover {
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.05);
+    }
+
     .ticker-large {
-        font-size: 4rem;
+        font-size: 4.5rem;
         font-weight: 700;
         margin: 0;
-        line-height: 1.2;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+        color: #111827;
     }
     .conviction {
-        font-size: 1.5rem;
-        color: #2e7d32;
-        margin: 0;
+        font-size: 1.2rem;
+        color: #059669;
+        font-weight: 500;
+        margin: 0.3rem 0 0.5rem 0;
     }
     .meta-text {
-        color: #6c757d;
+        color: #6B7280;
+        font-size: 0.9rem;
+        margin-bottom: 0.2rem;
+    }
+    .source-badge {
+        background-color: #F3F4F6;
+        display: inline-block;
+        padding: 0.2rem 0.8rem;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: #374151;
+        margin-top: 0.5rem;
+    }
+
+    .section-divider {
+        margin: 1.5rem 0;
+        border-top: 1px solid #E5E7EB;
+    }
+
+    .metric-label {
+        font-size: 0.85rem;
+        color: #6B7280;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        font-weight: 500;
+    }
+    .metric-value {
+        font-size: 1.3rem;
+        font-weight: 600;
+        color: #111827;
+    }
+
+    /* Table styling */
+    .weight-table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        margin-top: 1rem;
+    }
+    .weight-table th {
+        text-align: left;
+        padding: 0.5rem 0.5rem 0.5rem 0;
+        font-weight: 600;
+        color: #374151;
+        border-bottom: 1px solid #E5E7EB;
+        font-size: 0.85rem;
+    }
+    .weight-table td {
+        padding: 0.5rem 0.5rem 0.5rem 0;
+        border-bottom: 1px solid #F3F4F6;
         font-size: 0.9rem;
     }
-    .metric-table {
-        width: 100%;
-        border-collapse: collapse;
+    .weight-table tr:last-child td {
+        border-bottom: none;
     }
-    .metric-table th {
-        text-align: left;
-        padding: 0.3rem 0;
+    .highlight-row {
+        background-color: #F9FAFB;
         font-weight: 600;
-        border-bottom: 1px solid #dee2e6;
     }
-    .metric-table td {
-        padding: 0.3rem 0;
-        border-bottom: 1px solid #f1f3f5;
+
+    /* Dropdown styling */
+    .stSelectbox > div > div {
+        background-color: #F9FAFB;
+        border: 1px solid #E5E7EB;
+        border-radius: 8px;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# Header
-st.markdown('<div class="main-header">Lead-Lag Miner ETF Engine</div>', unsafe_allow_html=True)
+# ---------- Header ----------
+st.markdown('<div class="main-header">SAMBA — Lead-Lag Miner ETF Engine</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="sub-header">Cross-Correlation · Granger Causality · VAR IRF · Transfer Entropy</div>',
     unsafe_allow_html=True,
@@ -79,88 +148,196 @@ tab_fi, tab_eq = st.tabs(["Option A — Fixed Income / Commodities", "Option B �
 # Load latest results
 results = load_latest_result()
 
-# Helper to display a card
-def display_card(universe: str, mode: str, data: dict):
-    if not data:
-        st.info("Waiting for training output...")
+
+# ---------- Helper Functions ----------
+def format_pct(value):
+    """Format as percentage string with sign."""
+    if value is None or np.isnan(value):
+        return "—"
+    return f"{value*100:.1f}%"
+
+
+def format_number(value, decimals=2):
+    if value is None or np.isnan(value):
+        return "—"
+    return f"{value:.{decimals}f}"
+
+
+def display_metrics_card(metrics: dict):
+    """Render metrics table for a given result."""
+    if not metrics:
+        return
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        st.markdown(f'<div class="metric-label">ANN RETURN</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-value">{format_pct(metrics.get("ann_return"))}</div>', unsafe_allow_html=True)
+    with col2:
+        st.markdown(f'<div class="metric-label">ANN VOL</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-value">{format_pct(metrics.get("ann_vol"))}</div>', unsafe_allow_html=True)
+    with col3:
+        st.markdown(f'<div class="metric-label">SHARPE</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-value">{format_number(metrics.get("sharpe"), 2)}</div>', unsafe_allow_html=True)
+    with col4:
+        st.markdown(f'<div class="metric-label">MAX DD</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-value">{format_pct(metrics.get("max_dd"))}</div>', unsafe_allow_html=True)
+    with col5:
+        st.markdown(f'<div class="metric-label">HIT RATE</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-value">{format_pct(metrics.get("hit_rate"))}</div>', unsafe_allow_html=True)
+
+
+def display_shrinking_weights(windows: list, selected_ticker: str):
+    """Display table of weighted scores for all ETFs across shrinking windows."""
+    if not windows:
         return
 
-    ticker = data.get("ticker")
-    if not ticker:
-        st.info("Waiting for training output...")
+    # Aggregate weights per ETF
+    scores = {}
+    for w in windows:
+        ticker = w["ticker"]
+        ret = w["metrics"].get("ann_return", 0.0)
+        sharpe = w["metrics"].get("sharpe", 0.0)
+        max_dd = w["metrics"].get("max_dd", -1.0)
+
+        if ret <= 0:
+            weight = 0.0
+        else:
+            dd_score = 1.0 / (1.0 + abs(max_dd))
+            weight = (
+                config.WEIGHT_RETURN * ret
+                + config.WEIGHT_SHARPE * sharpe
+                + config.WEIGHT_MAXDD * dd_score
+            )
+        scores[ticker] = scores.get(ticker, 0.0) + weight
+
+    if not scores:
         return
 
-    # Next trading day
+    # Sort by weight descending
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    df_scores = pd.DataFrame(sorted_scores, columns=["ETF", "Weighted Score"])
+    df_scores["Weighted Score"] = df_scores["Weighted Score"].round(4)
+    df_scores.index = df_scores.index + 1  # 1-based ranking
+
+    st.markdown("#### ETF Weighted Scores (Shrinking Window Aggregation)")
+    st.dataframe(
+        df_scores.style.highlight_between(
+            subset=["Weighted Score"], left=df_scores["Weighted Score"].max(), right=df_scores["Weighted Score"].max(), color="#E6F7E6"
+        ).format({"Weighted Score": "{:.4f}"}),
+        use_container_width=True,
+        hide_index=False,
+    )
+    st.caption("Weighting: 60% Return · 20% Sharpe · 20% Max DD (inverted). Negative return years receive zero weight.")
+
+
+def display_global_card(universe_data: dict):
+    """Display Global Training card."""
+    global_data = universe_data.get("global", {})
+    if not global_data or not global_data.get("ticker"):
+        st.info("⏳ Waiting for training output...")
+        return
+
+    ticker = global_data["ticker"]
+    metrics = global_data.get("metrics", {})
+    test_start = global_data.get("test_start", "")
+    test_end = global_data.get("test_end", "")
+
     next_day = next_trading_day(datetime.utcnow())
     gen_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-    with st.container():
-        st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="card">', unsafe_allow_html=True)
 
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.markdown(f'<div class="ticker-large">{ticker}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="conviction">100.0% conviction</div>', unsafe_allow_html=True)
-            st.markdown(
-                f'<div class="meta-text">Signal for {next_day.strftime("%Y-%m-%d")} · Generated {gen_time}</div>',
-                unsafe_allow_html=True,
-            )
-            st.markdown(f'<div class="meta-text"><strong>Source:</strong> {mode}</div>', unsafe_allow_html=True)
+    # Top row: Ticker and meta
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.markdown(f'<div class="ticker-large">{ticker}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="conviction">100.0% conviction</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="meta-text">Signal for {next_day.strftime("%Y-%m-%d")} · Generated {gen_time}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="source-badge">Source: Global Training</div>', unsafe_allow_html=True)
+    with col2:
+        st.markdown('<div class="meta-text">2nd: — 0.0%</div>', unsafe_allow_html=True)
+        st.markdown('<div class="meta-text">3rd: — 0.0%</div>', unsafe_allow_html=True)
 
-        with col2:
-            # Show 2nd/3rd place if available
-            st.markdown('<div class="meta-text">2nd: — 0.0%</div>', unsafe_allow_html=True)
-            st.markdown('<div class="meta-text">3rd: — 0.0%</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-        st.markdown("---")
+    st.markdown(f'**FIXED SPLIT (80/10/10)**  ')
+    st.markdown(f'<div class="meta-text">Test: {test_start} → {test_end}</div>', unsafe_allow_html=True)
 
-        # Metrics table
-        metrics = data.get("metrics", {})
-        if metrics:
-            if mode == "Global":
-                st.markdown(f'**FIXED SPLIT (80/10/10)**  ')
-                st.markdown(f'Test: {data.get("test_start", "")} → {data.get("test_end", "")}')
-            else:
-                # Show latest window info
-                windows = data.get("windows", [])
-                if windows:
-                    last_win = windows[-1]
-                    st.markdown(f'**SHRINKING WINDOW**  ')
-                    st.markdown(f'Window: {last_win["window_start"]} → {last_win["val_end"]} · OOS: {last_win["test_start"]} → {last_win["test_end"]}')
+    display_metrics_card(metrics)
 
-            # Table
-            metric_df = pd.DataFrame([
-                ["ANN RETURN", f"{metrics.get('ann_return', 0)*100:.1f}%"],
-                ["ANN VOL", f"{metrics.get('ann_vol', 0)*100:.1f}%"],
-                ["SHARPE", f"{metrics.get('sharpe', 0):.2f}"],
-                ["MAX DD (PEAK→TROUGH)", f"{metrics.get('max_dd', 0)*100:.1f}%"],
-                ["HIT RATE", f"{metrics.get('hit_rate', 0)*100:.1f}%"],
-            ], columns=["Metric", "Value"])
-            st.table(metric_df)
-
-        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
+def display_shrinking_card(universe_data: dict):
+    """Display Shrinking Window card with dropdown and weight table."""
+    shrinking_data = universe_data.get("shrinking", {})
+    if not shrinking_data or not shrinking_data.get("ticker"):
+        st.info("⏳ Waiting for training output...")
+        return
+
+    ticker = shrinking_data["ticker"]
+    windows = shrinking_data.get("windows", [])
+
+    next_day = next_trading_day(datetime.utcnow())
+    gen_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.markdown(f'<div class="ticker-large">{ticker}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="conviction">100.0% conviction</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="meta-text">Signal for {next_day.strftime("%Y-%m-%d")} · Generated {gen_time}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="source-badge">Source: Shrinking Window</div>', unsafe_allow_html=True)
+    with col2:
+        st.markdown('<div class="meta-text">2nd: — 0.0%</div>', unsafe_allow_html=True)
+        st.markdown('<div class="meta-text">3rd: — 0.0%</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    # Dropdown for window selection
+    if windows:
+        window_labels = [
+            f"Window {i+1}: {w['window_start']} → {w['val_end']} (OOS: {w['test_start']} → {w['test_end']})"
+            for i, w in enumerate(windows)
+        ]
+        selected_idx = st.selectbox(
+            "Select a training window to view its out‑of‑sample metrics:",
+            range(len(window_labels)),
+            format_func=lambda i: window_labels[i],
+            key=f"shrinking_select_{universe_data.get('name','')}"
+        )
+        selected_window = windows[selected_idx]
+        st.markdown(f'<div class="meta-text">OOS Period: {selected_window["test_start"]} → {selected_window["test_end"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="meta-text">Selected ETF for this window: <strong>{selected_window["ticker"]}</strong></div>', unsafe_allow_html=True)
+        display_metrics_card(selected_window["metrics"])
+    else:
+        st.info("No window data available.")
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    # Weighted scores table
+    display_shrinking_weights(windows, ticker)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ---------- Render Tabs ----------
 with tab_fi:
     st.subheader("FI / Commodities")
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("### Global Training")
-        global_data = results.get("fi", {}).get("global", {})
-        display_card("fi", "Global", global_data)
+        display_global_card(results.get("fi", {}))
     with col2:
         st.markdown("### Shrinking Window")
-        shrinking_data = results.get("fi", {}).get("shrinking", {})
-        display_card("fi", "Shrinking Window", shrinking_data)
+        display_shrinking_card(results.get("fi", {}))
 
 with tab_eq:
-    st.subheader("Equity")
+    st.subheader("Equity Sectors")
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("### Global Training")
-        global_data = results.get("equity", {}).get("global", {})
-        display_card("equity", "Global", global_data)
+        display_global_card(results.get("equity", {}))
     with col2:
         st.markdown("### Shrinking Window")
-        shrinking_data = results.get("equity", {}).get("shrinking", {})
-        display_card("equity", "Shrinking Window", shrinking_data)
+        display_shrinking_card(results.get("equity", {}))
