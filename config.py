@@ -33,9 +33,10 @@ MIN_TRAIN_DAYS = 252 * 2  # 2 years
 # Shrinking window start years
 SHRINKING_START_YEARS = list(range(2008, 2025))  # 2008 through 2024
 
-# Selection weights for shrinking window aggregation
+# Selection weights for shrinking window aggregation (updated: 60/10/10/20)
 WEIGHT_RETURN = 0.6
-WEIGHT_SHARPE = 0.2
+WEIGHT_SHARPE = 0.1
+WEIGHT_HITRATE = 0.1
 WEIGHT_MAXDD = 0.2
 
 # Annualization factor (trading days)
