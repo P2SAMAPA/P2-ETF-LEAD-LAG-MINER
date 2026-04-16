@@ -197,6 +197,7 @@ def display_shrinking_weights(windows: list, selected_ticker: str):
         ret = w["metrics"].get("ann_return", 0.0)
         sharpe = w["metrics"].get("sharpe", 0.0)
         max_dd = w["metrics"].get("max_dd", -1.0)
+        hit_rate = w["metrics"].get("hit_rate", 0.0)
 
         if ret <= 0:
             weight = 0.0
@@ -205,6 +206,7 @@ def display_shrinking_weights(windows: list, selected_ticker: str):
             weight = (
                 config.WEIGHT_RETURN * ret
                 + config.WEIGHT_SHARPE * sharpe
+                + config.WEIGHT_HITRATE * hit_rate
                 + config.WEIGHT_MAXDD * dd_score
             )
         scores[ticker] = scores.get(ticker, 0.0) + weight
@@ -226,7 +228,7 @@ def display_shrinking_weights(windows: list, selected_ticker: str):
         use_container_width=True,
         hide_index=False,
     )
-    st.caption("Weighting: 60% Return · 20% Sharpe · 20% Max DD (inverted). Negative return years receive zero weight.")
+    st.caption("Weighting: 60% Return · 10% Sharpe · 10% Hit Rate · 20% Max DD (inverted). Negative return years receive zero weight.")
 
 
 def display_global_card(universe_data: dict):
