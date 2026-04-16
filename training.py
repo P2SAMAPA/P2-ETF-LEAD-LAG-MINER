@@ -43,7 +43,7 @@ def train_global(universe: str, returns: pd.DataFrame, end_date: str) -> dict:
     tickers = [col.replace("_ret", "") for col in returns.columns]
     top_etf = select_top_etf(consensus, val_ret, tickers)
 
-    # Evaluate on test set (for reporting)
+    # Evaluate on test set
     metrics = evaluate_etf(top_etf, test_ret)
 
     return {
@@ -77,7 +77,7 @@ def train_shrinking_window(universe: str, returns: pd.DataFrame) -> dict:
         if len(val_ret) < 20 or len(test_ret) < 20:
             continue
 
-        # Compute consensus on this window
+        # Recompute lead-lag metrics using only this window's training data
         corr, corr_lag = cross_correlation_matrix(train_ret, max_lag=max(config.LAGS))
         gc_pval = granger_causality_matrix(train_ret, max_lag=max(config.LAGS))
         irf_lag = var_impulse_response_leadlag(train_ret, max_lag=max(config.LAGS))
@@ -98,7 +98,8 @@ def train_shrinking_window(universe: str, returns: pd.DataFrame) -> dict:
             "metrics": metrics,
         })
 
-    # Aggregate across windows with weighted scoring
+        print(f"Window {start_year}: ETF={top_etf}, Ann Return={metrics.get('ann_return',0)*100:.1f}%")
+
     if not results:
         return {"ticker": None, "metrics": {}, "windows": []}
 
@@ -176,6 +177,7 @@ def run_training() -> dict:
         print(f"Processing {universe} universe...")
         returns = get_universe_returns(df, universe)
         if returns.empty:
+            print(f"Warning: No returns data for {universe}")
             continue
 
         # Global training
