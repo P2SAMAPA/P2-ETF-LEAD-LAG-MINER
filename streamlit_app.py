@@ -4,7 +4,7 @@ Streamlit UI for Lead-Lag-Miner - Professional Styling with Weight Transparency
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import config
 from push_results import load_latest_result
 from us_calendar import next_trading_day
@@ -267,7 +267,7 @@ def display_global_card(universe_data: dict):
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-def display_shrinking_card(universe_data: dict):
+def display_shrinking_card(universe_data: dict, universe_name: str):
     """Display Shrinking Window card with dropdown and weight table."""
     shrinking_data = universe_data.get("shrinking", {})
     if not shrinking_data or not shrinking_data.get("ticker"):
@@ -304,7 +304,7 @@ def display_shrinking_card(universe_data: dict):
             "Select a training window to view its out‑of‑sample metrics:",
             range(len(window_labels)),
             format_func=lambda i: window_labels[i],
-            key=f"shrinking_select_{universe_data.get('name','')}"
+            key=f"shrinking_select_{universe_name}"  # Unique per tab
         )
         selected_window = windows[selected_idx]
         st.markdown(f'<div class="meta-text">OOS Period: {selected_window["test_start"]} → {selected_window["test_end"]}</div>', unsafe_allow_html=True)
@@ -330,7 +330,7 @@ with tab_fi:
         display_global_card(results.get("fi", {}))
     with col2:
         st.markdown("### Shrinking Window")
-        display_shrinking_card(results.get("fi", {}))
+        display_shrinking_card(results.get("fi", {}), "fi")
 
 with tab_eq:
     st.subheader("Equity Sectors")
@@ -340,4 +340,4 @@ with tab_eq:
         display_global_card(results.get("equity", {}))
     with col2:
         st.markdown("### Shrinking Window")
-        display_shrinking_card(results.get("equity", {}))
+        display_shrinking_card(results.get("equity", {}), "equity")
