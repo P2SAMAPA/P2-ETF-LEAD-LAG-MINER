@@ -21,6 +21,35 @@ from us_calendar import next_trading_day
 from push_results import push_daily_result
 
 
+def evaluate_etf(ticker: str, returns: pd.DataFrame) -> dict:
+    """Compute performance metrics for a given ETF ticker."""
+    col = f"{ticker}_ret"
+    if col not in returns.columns:
+        return {}
+    ret_series = returns[col].dropna()
+    if len(ret_series) < 5:
+        return {}
+
+    ann_return = ret_series.mean() * config.TRADING_DAYS_PER_YEAR
+    ann_vol = ret_series.std() * np.sqrt(config.TRADING_DAYS_PER_YEAR)
+    sharpe = ann_return / ann_vol if ann_vol > 0 else 0.0
+
+    cum = (1 + ret_series).cumprod()
+    rolling_max = cum.expanding().max()
+    drawdown = (cum - rolling_max) / rolling_max
+    max_dd = drawdown.min()
+
+    hit_rate = (ret_series > 0).mean()
+
+    return {
+        "ann_return": ann_return,
+        "ann_vol": ann_vol,
+        "sharpe": sharpe,
+        "max_dd": max_dd,
+        "hit_rate": hit_rate,
+    }
+
+
 def train_global(universe: str, returns: pd.DataFrame, end_date: str) -> dict:
     """Train using global 80/10/10 split ending at end_date."""
     total_days = len(returns)
@@ -43,11 +72,19 @@ def train_global(universe: str, returns: pd.DataFrame, end_date: str) -> dict:
     tickers = [col.replace("_ret", "") for col in returns.columns]
     top_etf = select_top_etf(consensus, val_ret, tickers)
 
+    # Predicted return: average forward return of selected ETF on validation set (annualized)
+    col = f"{top_etf}_ret"
+    if col in val_ret.columns:
+        pred_return = val_ret[col].mean() * config.TRADING_DAYS_PER_YEAR
+    else:
+        pred_return = None
+
     # Evaluate on test set
     metrics = evaluate_etf(top_etf, test_ret)
 
     return {
         "ticker": top_etf,
+        "pred_return": pred_return,
         "metrics": metrics,
         "test_start": test_ret.index[0].strftime("%Y-%m-%d"),
         "test_end": test_ret.index[-1].strftime("%Y-%m-%d"),
@@ -88,6 +125,10 @@ def train_shrinking_window(universe: str, returns: pd.DataFrame) -> dict:
         top_etf = select_top_etf(consensus, val_ret, tickers)
         metrics = evaluate_etf(top_etf, test_ret)
 
+        # Predicted return for this window (from validation)
+        col = f"{top_etf}_ret"
+        val_pred_return = val_ret[col].mean() * config.TRADING_DAYS_PER_YEAR if col in val_ret.columns else None
+
         results.append({
             "window_start": start_date,
             "train_end": train_ret.index[-1].strftime("%Y-%m-%d"),
@@ -95,52 +136,30 @@ def train_shrinking_window(universe: str, returns: pd.DataFrame) -> dict:
             "test_start": test_ret.index[0].strftime("%Y-%m-%d"),
             "test_end": test_ret.index[-1].strftime("%Y-%m-%d"),
             "ticker": top_etf,
+            "val_pred_return": val_pred_return,
             "metrics": metrics,
         })
 
         print(f"Window {start_year}: ETF={top_etf}, Ann Return={metrics.get('ann_return',0)*100:.1f}%")
 
     if not results:
-        return {"ticker": None, "metrics": {}, "windows": []}
+        return {"ticker": None, "windows": [], "pred_return": None}
 
     weighted_pick = aggregate_windows(results)
+
+    # Compute predicted return for the weighted pick: average val_pred_return across windows where it was chosen
+    pick_returns = [w["val_pred_return"] for w in results if w["ticker"] == weighted_pick and w["val_pred_return"] is not None]
+    pred_return = np.mean(pick_returns) if pick_returns else None
+
+    print(f"  Weighted ensemble pick: {weighted_pick}")
     return {
         "ticker": weighted_pick,
+        "pred_return": pred_return,
         "windows": results,
     }
 
 
-def evaluate_etf(ticker: str, returns: pd.DataFrame) -> dict:
-    """Compute performance metrics for a given ETF ticker."""
-    col = f"{ticker}_ret"
-    if col not in returns.columns:
-        return {}
-    ret_series = returns[col].dropna()
-    if len(ret_series) < 5:
-        return {}
-
-    ann_return = ret_series.mean() * config.TRADING_DAYS_PER_YEAR
-    ann_vol = ret_series.std() * np.sqrt(config.TRADING_DAYS_PER_YEAR)
-    sharpe = ann_return / ann_vol if ann_vol > 0 else 0.0
-
-    cum = (1 + ret_series).cumprod()
-    rolling_max = cum.expanding().max()
-    drawdown = (cum - rolling_max) / rolling_max
-    max_dd = drawdown.min()
-
-    hit_rate = (ret_series > 0).mean()
-
-    return {
-        "ann_return": ann_return,
-        "ann_vol": ann_vol,
-        "sharpe": sharpe,
-        "max_dd": max_dd,
-        "hit_rate": hit_rate,
-    }
-
-
 def aggregate_windows(windows: list) -> str:
-    """Weighted selection across shrinking windows (zero weight if negative return)."""
     scores = {}
     for w in windows:
         ticker = w["ticker"]
