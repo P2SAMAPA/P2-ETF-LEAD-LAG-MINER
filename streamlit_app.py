@@ -56,6 +56,12 @@ st.markdown(
         letter-spacing: -0.02em;
         color: #111827;
     }
+    .pred-return {
+        font-size: 1.4rem;
+        color: #059669;
+        font-weight: 500;
+        margin: 0.3rem 0 0.5rem 0;
+    }
     .meta-text {
         color: #6B7280;
         font-size: 0.9rem;
@@ -144,17 +150,28 @@ results = load_latest_result()
 
 
 # ---------- Helper Functions ----------
+def safe_float(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
 def format_pct(value):
     """Format as percentage string with sign."""
-    if value is None or np.isnan(value):
+    v = safe_float(value)
+    if v is None or np.isnan(v):
         return "—"
-    return f"{value*100:.1f}%"
+    return f"{v*100:.1f}%"
 
 
 def format_number(value, decimals=2):
-    if value is None or np.isnan(value):
+    v = safe_float(value)
+    if v is None or np.isnan(v):
         return "—"
-    return f"{value:.{decimals}f}"
+    return f"{v:.{decimals}f}"
 
 
 def display_metrics_card(metrics: dict):
@@ -233,6 +250,7 @@ def display_global_card(universe_data: dict):
         return
 
     ticker = global_data["ticker"]
+    pred_return = global_data.get("pred_return")
     metrics = global_data.get("metrics", {})
     test_start = global_data.get("test_start", "")
     test_end = global_data.get("test_end", "")
@@ -242,17 +260,15 @@ def display_global_card(universe_data: dict):
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
 
-    # Top row: Ticker and meta (no conviction, no 2nd/3rd placeholders)
+    # Top row: Ticker and meta
     col1, col2 = st.columns([2, 1])
     with col1:
         st.markdown(f'<div class="ticker-large">{ticker}</div>', unsafe_allow_html=True)
+        if pred_return is not None:
+            st.markdown(f'<div class="pred-return">Predicted Return: {format_pct(pred_return)}</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="meta-text">Signal for {next_day.strftime("%Y-%m-%d")} · Generated {gen_time}</div>', unsafe_allow_html=True)
         st.markdown('<div class="source-badge">Source: Global Training</div>', unsafe_allow_html=True)
     with col2:
-        # Optional: if a score is ever added to the JSON, display it here
-        # e.g., lead_lag_score = global_data.get("lead_lag_score")
-        # if lead_lag_score is not None:
-        #     st.markdown(f'<div class="meta-text">Lead‑Lag Score: {lead_lag_score:.3f}</div>', unsafe_allow_html=True)
         pass
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -273,6 +289,7 @@ def display_shrinking_card(universe_data: dict, universe_name: str):
         return
 
     ticker = shrinking_data["ticker"]
+    pred_return = shrinking_data.get("pred_return")
     windows = shrinking_data.get("windows", [])
 
     next_day = next_trading_day(datetime.utcnow())
@@ -283,10 +300,11 @@ def display_shrinking_card(universe_data: dict, universe_name: str):
     col1, col2 = st.columns([2, 1])
     with col1:
         st.markdown(f'<div class="ticker-large">{ticker}</div>', unsafe_allow_html=True)
+        if pred_return is not None:
+            st.markdown(f'<div class="pred-return">Predicted Return: {format_pct(pred_return)}</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="meta-text">Signal for {next_day.strftime("%Y-%m-%d")} · Generated {gen_time}</div>', unsafe_allow_html=True)
         st.markdown('<div class="source-badge">Source: Shrinking Window</div>', unsafe_allow_html=True)
     with col2:
-        # Optional score placeholder
         pass
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
