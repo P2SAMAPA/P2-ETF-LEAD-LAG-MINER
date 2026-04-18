@@ -12,7 +12,7 @@ HF_TOKEN = os.environ.get("HF_TOKEN")
 
 # Universes
 FI_COMMODITY_TICKERS = ["TLT", "VCIT", "LQD", "HYG", "VNQ", "GLD", "SLV"]
-EQUITY_TICKERS = ["QQQ", "IWM", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE", "GDX", "XME"]
+EQUITY_TICKERS = ["QQQ", "IWM", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE", "GDX", "IWF", "XSD", "XBI", "XME"]
 BENCHMARK_FI = "AGG"
 BENCHMARK_EQ = "SPY"
 
