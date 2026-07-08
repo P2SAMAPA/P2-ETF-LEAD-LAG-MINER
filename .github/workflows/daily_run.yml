@@ -2,7 +2,7 @@ name: Daily Lead-Lag Training
 
 on:
   schedule:
-    - cron: '20 21 * * *'  # Daily at 06:00 UTC
+    - cron: '20 00 * * *'  # Daily at 06:00 UTC
   workflow_dispatch:      # Manual trigger
 
 jobs:
