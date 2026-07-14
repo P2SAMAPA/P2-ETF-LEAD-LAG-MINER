@@ -1,275 +1,233 @@
 """
-Training pipeline for ETF Lead-Lag Miner
-FIXED: Handles new ETFs with shorter histories (SMH, SOXX, XLB)
+Global and Shrinking Window training orchestration.
 """
-
 import pandas as pd
 import numpy as np
-import warnings
-from datetime import datetime
-import sys
+from datetime import datetime, timedelta
+import json
 import os
 
-# Import local modules
-from data_manager import DataManager
-from lead_lag_engine import compute_lead_lag_metrics, clean_returns_for_analysis
-from selector import select_etf
-from us_calendar import get_us_calendar
-from utils import safe_import_data
-
-warnings.filterwarnings('ignore')
-
-# Configuration
-from config import FI_ETFS, EQ_ETFS, LAGS, TRAIN_SPLIT, VAL_SPLIT, TEST_SPLIT
-
-
-def train_global(universe, returns, end_date=None):
-    """
-    Global training with 80/10/10 split.
-    FIXED: Handles missing data for new tickers.
-    """
-    print(f"\n=== Global Training for {universe} Universe ===")
-    
-    # FIX: Clean returns before analysis
-    clean_returns = clean_returns_for_analysis(returns, min_valid_obs=50)
-    
-    # FIX: Check if we have enough tickers after cleaning
-    if len(clean_returns.columns) < 2:
-        print(f"Error: Not enough tickers in {universe} universe after cleaning")
-        return None
-    
-    # Split data
-    n = len(clean_returns)
-    train_end = int(n * TRAIN_SPLIT)
-    val_end = int(n * (TRAIN_SPLIT + VAL_SPLIT))
-    
-    train_data = clean_returns.iloc[:train_end]
-    val_data = clean_returns.iloc[train_end:val_end]
-    test_data = clean_returns.iloc[val_end:]
-    
-    print(f"Train: {len(train_data)} days, Val: {len(val_data)} days, Test: {len(test_data)} days")
-    
-    # Compute lead-lag metrics on training data
-    metrics = compute_lead_lag_metrics(train_data, max_lag=max(LAGS))
-    
-    # Select best ETF based on validation data
-    try:
-        selected_etf = select_etf(
-            train_data=train_data,
-            val_data=val_data,
-            test_data=test_data,
-            metrics=metrics,
-            universe=universe,
-            end_date=end_date
-        )
-    except Exception as e:
-        print(f"Selection failed: {e}")
-        # FIX: Fallback to highest return ETF
-        print("Using fallback selection based on returns...")
-        avg_returns = train_data.mean().sort_values(ascending=False)
-        selected_etf = avg_returns.index[0] if len(avg_returns) > 0 else None
-    
-    return selected_etf
+import config
+from data_manager import load_master_data, prepare_data, get_universe_returns
+from lead_lag_engine import (
+    cross_correlation_matrix,
+    granger_causality_matrix,
+    var_impulse_response_leadlag,
+    transfer_entropy_matrix,
+    lead_lag_consensus,
+)
+from selector import select_top_etf
+from us_calendar import next_trading_day
+from push_results import push_daily_result
 
 
-def train_shrinking_window(universe, returns, end_date=None):
-    """
-    Shrinking window training (expanding window from 2008).
-    FIXED: Handles tickers with insufficient history.
-    """
-    print(f"\n=== Shrinking Window Training for {universe} Universe ===")
-    
-    # FIX: Clean returns
-    clean_returns = clean_returns_for_analysis(returns, min_valid_obs=30)
-    
-    if len(clean_returns.columns) < 2:
-        print(f"Error: Not enough tickers in {universe} universe after cleaning")
-        return None
-    
-    # Start from 2008
-    start_date = '2008-01-01'
-    start_idx = clean_returns.index.get_loc(pd.Timestamp(start_date), method='nearest')
-    
-    selections = []
-    windows = []
-    
-    for year in range(2008, 2026):
-        # FIX: End at current year end or data end
-        end_date_str = f"{year}-12-31"
-        if end_date_str > clean_returns.index[-1].strftime('%Y-%m-%d'):
-            end_date_str = clean_returns.index[-1].strftime('%Y-%m-%d')
-        
-        # Get data up to this year
-        window_data = clean_returns.loc[start_date:end_date_str]
-        
-        if len(window_data) < 100:  # Need minimum data
-            continue
-            
-        # Compute metrics on window
-        try:
-            metrics = compute_lead_lag_metrics(window_data, max_lag=max(LAGS))
-            
-            # Simple selection: highest average return in window
-            avg_returns = window_data.mean().sort_values(ascending=False)
-            selected = avg_returns.index[0] if len(avg_returns) > 0 else None
-            
-            if selected:
-                selections.append(selected)
-                windows.append(year)
-                print(f"Window {year}: ETF={selected}, Ann Return={window_data[selected].mean()*252:.1%}")
-                
-        except Exception as e:
-            print(f"Window {year}: Failed - {str(e)[:50]}")
-            continue
-    
-    # FIX: Weighted ensemble - more recent years get more weight
-    if selections:
-        unique_etfs = list(set(selections))
-        weights = {}
-        
-        for i, etf in enumerate(selections):
-            # FIX: Weight by recency (most recent years weighted more)
-            weight = i + 1  # Linear increasing weight
-            if etf not in weights:
-                weights[etf] = 0
-            weights[etf] += weight
-        
-        # FIX: Normalize by total weight
-        total_weight = sum(weights.values())
-        weights = {k: v/total_weight for k, v in weights.items()}
-        
-        # Select with highest weighted score
-        selected_etf = max(weights, key=weights.get)
-        print(f"\nWeighted ensemble pick: {selected_etf}")
-        print(f"Selection weights: {weights}")
-        
-        return selected_etf
-    else:
-        print("No valid windows found")
-        return None
+def evaluate_etf(ticker: str, returns: pd.DataFrame) -> dict:
+    """Compute performance metrics for a given ETF ticker."""
+    col = f"{ticker}_ret"
+    if col not in returns.columns:
+        return {}
+    ret_series = returns[col].dropna()
+    if len(ret_series) < 5:
+        return {}
 
+    ann_return = ret_series.mean() * config.TRADING_DAYS_PER_YEAR
+    ann_vol = ret_series.std() * np.sqrt(config.TRADING_DAYS_PER_YEAR)
+    sharpe = ann_return / ann_vol if ann_vol > 0 else 0.0
 
-def run_training():
-    """
-    Main training function.
-    FIXED: Better error handling and logging.
-    """
-    print("Loading data...")
-    
-    # FIX: Load master data with proper error handling
-    try:
-        # Load from local or remote
-        if os.path.exists('master_data.parquet'):
-            df = pd.read_parquet('master_data.parquet')
-        else:
-            # Try to download from remote
-            import requests
-            url = "https://github.com/P2SAMAPA/fi-etf-macro-signal-master-data/raw/main/master_data.parquet"
-            response = requests.get(url)
-            with open('master_data.parquet', 'wb') as f:
-                f.write(response.content)
-            df = pd.read_parquet('master_data.parquet')
-            
-        print(f"Data loaded: {len(df)} rows, {len(df.columns)} columns")
-        
-    except Exception as e:
-        print(f"Error loading data: {e}")
-        return None
-    
-    # FIX: Ensure index is datetime
-    if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df.index)
-    
-    # FIX: Define core ETFs (price/return columns, not derived features)
-    core_etfs = [
-        'GLD', 'SPY', 'AGG', 'TLT', 'VCIT', 'LQD', 'HYG', 'VNQ', 'SLV', 'QQQ',
-        'XLK', 'XLF', 'XLE', 'XLV', 'XLI', 'XLY', 'XLP', 'XLU', 'XME', 'GDX',
-        'IWM', 'IWF', 'XSD', 'SMH', 'SOXX', 'XBI', 'XLB', 'XLRE', 'IWD', 'IWO'
-    ]
-    
-    # FIX: Extract only core ETF columns that exist
-    available_etfs = [t for t in core_etfs if t in df.columns]
-    print(f"Available ETFs: {available_etfs}")
-    
-    # Separate into FI and Equity universes
-    fi_universe = [t for t in FI_ETFS if t in available_etfs]
-    eq_universe = [t for t in EQ_ETFS if t in available_etfs]
-    
-    print(f"FI Universe: {fi_universe}")
-    print(f"Equity Universe: {eq_universe}")
-    
-    # FIX: Compute returns from price data (assuming price columns)
-    price_df = df[available_etfs].copy()
-    
-    # FIX: Handle missing values in price data
-    price_df = price_df.fillna(method='ffill').fillna(method='bfill')
-    
-    # FIX: Compute returns with min_periods to avoid NaN issues
-    returns_df = price_df.pct_change().dropna()
-    
-    # FIX: Limit data to valid range
-    min_date = returns_df.index.min()
-    max_date = returns_df.index.max()
-    print(f"Returns range: {min_date} to {max_date}")
-    
-    # FIX: Run training with proper error handling
-    try:
-        if fi_universe:
-            fi_returns = returns_df[fi_universe]
-            print(f"\nProcessing fi universe...")
-            fi_selected = train_shrinking_window('fi', fi_returns, end_date=df.index[-1].strftime('%Y-%m-%d'))
-            
-            if fi_selected is None:
-                # Try global training as fallback
-                fi_selected = train_global('fi', fi_returns, end_date=df.index[-1].strftime('%Y-%m-%d'))
-        else:
-            fi_selected = None
-            print("No FI ETFs available")
-    except Exception as e:
-        print(f"FI training failed: {e}")
-        fi_selected = None
-    
-    try:
-        if eq_universe:
-            eq_returns = returns_df[eq_universe]
-            print(f"\nProcessing equity universe...")
-            eq_selected = train_shrinking_window('equity', eq_returns, end_date=df.index[-1].strftime('%Y-%m-%d'))
-            
-            if eq_selected is None:
-                # Try global training as fallback
-                eq_selected = train_global('equity', eq_returns, end_date=df.index[-1].strftime('%Y-%m-%d'))
-        else:
-            eq_selected = None
-            print("No Equity ETFs available")
-    except Exception as e:
-        print(f"Equity training failed: {e}")
-        eq_selected = None
-    
-    # FIX: Save results
-    results = {
-        'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'fi_selected': fi_selected,
-        'eq_selected': eq_selected,
-        'fi_universe': fi_universe,
-        'eq_universe': eq_universe
+    cum = (1 + ret_series).cumprod()
+    rolling_max = cum.expanding().max()
+    drawdown = (cum - rolling_max) / rolling_max
+    max_dd = drawdown.min()
+
+    hit_rate = (ret_series > 0).mean()
+
+    return {
+        "ann_return": ann_return,
+        "ann_vol": ann_vol,
+        "sharpe": sharpe,
+        "max_dd": max_dd,
+        "hit_rate": hit_rate,
     }
-    
-    # Save to file
-    results_df = pd.DataFrame([results])
-    results_df.to_csv('training_results.csv', index=False)
-    print(f"\nResults saved to training_results.csv")
-    
+
+
+def train_global(universe: str, returns: pd.DataFrame, end_date: str) -> dict:
+    """Train using global 80/10/10 split ending at end_date."""
+    total_days = len(returns)
+    train_end = int(total_days * config.TRAIN_RATIO)
+    val_end = train_end + int(total_days * config.VAL_RATIO)
+
+    train_ret = returns.iloc[:train_end]
+    val_ret = returns.iloc[train_end:val_end]
+    test_ret = returns.iloc[val_end:]
+
+    # FIX: Check if we have enough data
+    if len(train_ret) < 50 or len(val_ret) < 20 or len(test_ret) < 20:
+        print(f"Warning: Not enough data for {universe} global training")
+        return {"ticker": None, "pred_return": None, "metrics": {}}
+
+    # Compute lead-lag metrics on training data
+    corr, corr_lag = cross_correlation_matrix(train_ret, max_lag=max(config.LAGS))
+    gc_pval = granger_causality_matrix(train_ret, max_lag=max(config.LAGS))
+    irf_lag = var_impulse_response_leadlag(train_ret, max_lag=max(config.LAGS))
+    te = transfer_entropy_matrix(train_ret, lag=1)
+
+    consensus = lead_lag_consensus(corr_lag, gc_pval, irf_lag, te)
+
+    # Select top ETF based on validation set performance
+    tickers = [col.replace("_ret", "") for col in returns.columns]
+    top_etf = select_top_etf(consensus, val_ret, tickers)
+
+    # Predicted return: average forward return of selected ETF on validation set (annualized)
+    col = f"{top_etf}_ret"
+    if col in val_ret.columns:
+        pred_return = val_ret[col].mean() * config.TRADING_DAYS_PER_YEAR
+    else:
+        pred_return = None
+
+    # Evaluate on test set
+    metrics = evaluate_etf(top_etf, test_ret)
+
+    return {
+        "ticker": top_etf,
+        "pred_return": pred_return,
+        "metrics": metrics,
+        "test_start": test_ret.index[0].strftime("%Y-%m-%d") if len(test_ret) > 0 else None,
+        "test_end": test_ret.index[-1].strftime("%Y-%m-%d") if len(test_ret) > 0 else None,
+    }
+
+
+def train_shrinking_window(universe: str, returns: pd.DataFrame) -> dict:
+    """Run shrinking window training starting from each year in config."""
+    results = []
+    tickers = [col.replace("_ret", "") for col in returns.columns]
+
+    for start_year in config.SHRINKING_START_YEARS:
+        start_date = f"{start_year}-01-01"
+        mask = returns.index >= start_date
+        if mask.sum() < config.MIN_TRAIN_DAYS:
+            continue
+        window_returns = returns.loc[mask]
+
+        total_days = len(window_returns)
+        train_end = int(total_days * config.TRAIN_RATIO)
+        val_end = train_end + int(total_days * config.VAL_RATIO)
+
+        train_ret = window_returns.iloc[:train_end]
+        val_ret = window_returns.iloc[train_end:val_end]
+        test_ret = window_returns.iloc[val_end:]
+
+        if len(val_ret) < 20 or len(test_ret) < 20:
+            continue
+
+        # Recompute lead-lag metrics using only this window's training data
+        corr, corr_lag = cross_correlation_matrix(train_ret, max_lag=max(config.LAGS))
+        gc_pval = granger_causality_matrix(train_ret, max_lag=max(config.LAGS))
+        irf_lag = var_impulse_response_leadlag(train_ret, max_lag=max(config.LAGS))
+        te = transfer_entropy_matrix(train_ret, lag=1)
+
+        consensus = lead_lag_consensus(corr_lag, gc_pval, irf_lag, te)
+
+        top_etf = select_top_etf(consensus, val_ret, tickers)
+        metrics = evaluate_etf(top_etf, test_ret)
+
+        # Predicted return for this window (from validation)
+        col = f"{top_etf}_ret"
+        val_pred_return = val_ret[col].mean() * config.TRADING_DAYS_PER_YEAR if col in val_ret.columns else None
+
+        results.append({
+            "window_start": start_date,
+            "train_end": train_ret.index[-1].strftime("%Y-%m-%d"),
+            "val_end": val_ret.index[-1].strftime("%Y-%m-%d"),
+            "test_start": test_ret.index[0].strftime("%Y-%m-%d"),
+            "test_end": test_ret.index[-1].strftime("%Y-%m-%d"),
+            "ticker": top_etf,
+            "val_pred_return": val_pred_return,
+            "metrics": metrics,
+        })
+
+        print(f"Window {start_year}: ETF={top_etf}, Ann Return={metrics.get('ann_return',0)*100:.1f}%")
+
+    if not results:
+        return {"ticker": None, "windows": [], "pred_return": None}
+
+    weighted_pick = aggregate_windows(results)
+
+    # Compute predicted return for the weighted pick: average val_pred_return across windows where it was chosen
+    pick_returns = [w["val_pred_return"] for w in results if w["ticker"] == weighted_pick and w["val_pred_return"] is not None]
+    pred_return = np.mean(pick_returns) if pick_returns else None
+
+    print(f"  Weighted ensemble pick: {weighted_pick}")
+    return {
+        "ticker": weighted_pick,
+        "pred_return": pred_return,
+        "windows": results,
+    }
+
+
+def aggregate_windows(windows: list) -> str:
+    scores = {}
+    for w in windows:
+        ticker = w["ticker"]
+        ret = w["metrics"].get("ann_return", 0.0)
+        sharpe = w["metrics"].get("sharpe", 0.0)
+        max_dd = w["metrics"].get("max_dd", -1.0)
+        hit_rate = w["metrics"].get("hit_rate", 0.0)
+
+        if ret <= 0:
+            weight = 0.0
+        else:
+            dd_score = 1.0 / (1.0 + abs(max_dd))
+            weight = (
+                config.WEIGHT_RETURN * ret
+                + config.WEIGHT_SHARPE * sharpe
+                + config.WEIGHT_HITRATE * hit_rate
+                + config.WEIGHT_MAXDD * dd_score
+            )
+        scores[ticker] = scores.get(ticker, 0.0) + weight
+
+    if not scores:
+        return windows[-1]["ticker"] if windows else None
+    return max(scores, key=scores.get)
+
+
+def run_training() -> dict:
+    """Main training pipeline for both universes."""
+    print("Loading data...")
+    df_raw = load_master_data()
+    df = prepare_data(df_raw)
+
+    results = {}
+    for universe in ["fi", "equity"]:
+        print(f"Processing {universe} universe...")
+        returns = get_universe_returns(df, universe)
+        if returns.empty:
+            print(f"Warning: No returns data for {universe}")
+            continue
+
+        # FIX: Skip if too few tickers
+        if len(returns.columns) < 2:
+            print(f"Warning: Not enough tickers in {universe} universe (need at least 2)")
+            continue
+
+        # Global training
+        global_res = train_global(universe, returns, end_date=df.index[-1].strftime("%Y-%m-%d"))
+
+        # Shrinking window training
+        shrinking_res = train_shrinking_window(universe, returns)
+
+        results[universe] = {
+            "global": global_res,
+            "shrinking": shrinking_res,
+        }
+
     return results
 
 
 if __name__ == "__main__":
-    print("Run python training.py")
     output = run_training()
-    
-    if output:
-        print("\n=== TRAINING COMPLETE ===")
-        print(f"FI Selection: {output.get('fi_selected', 'N/A')}")
-        print(f"Equity Selection: {output.get('eq_selected', 'N/A')}")
+    # Push to HF dataset if token exists
+    if config.HF_TOKEN:
+        push_daily_result(output)
     else:
-        print("\n=== TRAINING FAILED ===")
-        sys.exit(1)
+        print("HF_TOKEN not set. Results not pushed.")
+        print(json.dumps(output, indent=2, default=str))
