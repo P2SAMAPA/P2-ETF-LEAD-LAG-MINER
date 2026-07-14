@@ -138,3 +138,80 @@ def get_macro_data(df: pd.DataFrame) -> pd.DataFrame:
     """Return DataFrame of macro columns."""
     available_macro = [col for col in config.MACRO_COLS if col in df.columns]
     return df[available_macro].dropna()
+
+
+# ============= ADD THIS WRAPPER CLASS FOR COMPATIBILITY =============
+class DataManager:
+    """
+    Minimal wrapper class for backward compatibility with training.py.
+    Uses the existing module functions.
+    """
+    
+    def __init__(self, data_path=None):
+        """Initialize DataManager (data_path is ignored, kept for compatibility)."""
+        self.data = None
+        self.returns = None
+    
+    def load_data(self, force_download=False):
+        """Load master data using the existing load_master_data() function."""
+        self.data = load_master_data()
+        return self.data
+    
+    def get_returns(self, tickers=None, start_date=None, end_date=None, min_valid_obs=50):
+        """
+        Get returns for specified tickers.
+        If tickers is None, returns all available returns.
+        """
+        if self.data is None:
+            self.load_data()
+        
+        # Ensure returns are computed
+        if f"{self.data.columns[0]}_ret" not in self.data.columns:
+            self.data = compute_returns(self.data)
+        
+        # Filter by date
+        df = self.data
+        if start_date:
+            df = df[df.index >= start_date]
+        if end_date:
+            df = df[df.index <= end_date]
+        
+        # Get return columns
+        ret_cols = [col for col in df.columns if col.endswith('_ret')]
+        
+        # Filter by tickers if specified
+        if tickers is not None:
+            ret_cols = [col for col in ret_cols if col.replace('_ret', '') in tickers]
+        
+        # FIX: Convert to simple returns (percentage change) for the lead-lag engine
+        # (The original compute_returns uses log returns, but lead_lag_engine expects simple returns)
+        price_cols = [col for col in df.columns if col not in config.MACRO_COLS and not col.endswith('_ret')]
+        if tickers:
+            price_cols = [col for col in price_cols if col in tickers]
+        
+        # Compute simple returns from price data
+        price_df = df[price_cols].copy()
+        # Forward fill missing values
+        price_df = price_df.fillna(method='ffill').fillna(method='bfill')
+        simple_returns = price_df.pct_change().dropna()
+        
+        # Filter by min_valid_obs
+        if min_valid_obs:
+            valid_cols = simple_returns.columns[simple_returns.count() >= min_valid_obs]
+            simple_returns = simple_returns[valid_cols]
+        
+        self.returns = simple_returns
+        return simple_returns
+    
+    def get_universe_data(self, universe='all', start_date=None, end_date=None):
+        """
+        Get data for a specific universe.
+        """
+        if universe == 'fi':
+            tickers = config.FI_COMMODITY_TICKERS
+        elif universe == 'equity':
+            tickers = config.EQUITY_TICKERS
+        else:
+            tickers = None
+        
+        return self.get_returns(tickers, start_date, end_date)
