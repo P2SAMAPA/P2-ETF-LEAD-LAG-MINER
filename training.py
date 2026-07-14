@@ -71,6 +71,12 @@ def train_global(universe: str, returns: pd.DataFrame, end_date: str) -> dict:
     irf_lag = var_impulse_response_leadlag(train_ret, max_lag=max(config.LAGS))
     te = transfer_entropy_matrix(train_ret, lag=1)
 
+    # FIX: Ensure irf_lag is a DataFrame with correct dimensions
+    # If VAR failed, irf_lag will be all zeros, which is fine - consensus will handle it
+    if irf_lag is None:
+        tickers = [col.replace("_ret", "") for col in train_ret.columns]
+        irf_lag = pd.DataFrame(0, index=tickers, columns=tickers)
+
     consensus = lead_lag_consensus(corr_lag, gc_pval, irf_lag, te)
 
     # Select top ETF based on validation set performance
@@ -124,6 +130,11 @@ def train_shrinking_window(universe: str, returns: pd.DataFrame) -> dict:
         gc_pval = granger_causality_matrix(train_ret, max_lag=max(config.LAGS))
         irf_lag = var_impulse_response_leadlag(train_ret, max_lag=max(config.LAGS))
         te = transfer_entropy_matrix(train_ret, lag=1)
+
+        # FIX: Ensure irf_lag is a DataFrame with correct dimensions
+        if irf_lag is None:
+            tickers_local = [col.replace("_ret", "") for col in train_ret.columns]
+            irf_lag = pd.DataFrame(0, index=tickers_local, columns=tickers_local)
 
         consensus = lead_lag_consensus(corr_lag, gc_pval, irf_lag, te)
 
