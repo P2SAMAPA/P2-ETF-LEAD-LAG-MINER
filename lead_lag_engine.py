@@ -264,7 +264,7 @@ def lead_lag_consensus(corr_lag: pd.DataFrame, gc_pval: pd.DataFrame,
     """
     Combine multiple methods into a consensus lead-lag score.
     Returns DataFrame with score (higher means row leads column).
-    FIXED: Handles NaN values gracefully.
+    FIXED: Properly iterates over DataFrame cells instead of using Series.
     """
     tickers = corr_lag.index
     score = pd.DataFrame(0.0, index=tickers, columns=tickers)
@@ -275,6 +275,9 @@ def lead_lag_consensus(corr_lag: pd.DataFrame, gc_pval: pd.DataFrame,
             if i == j:
                 continue
             lag_val = corr_lag.loc[i, j]
+            # FIX: Check if it's a scalar (not a Series)
+            if isinstance(lag_val, pd.Series):
+                lag_val = lag_val.iloc[0] if len(lag_val) > 0 else np.nan
             if not np.isnan(lag_val) and lag_val > 0:
                 score.loc[i, j] += 1.0
             elif not np.isnan(lag_val) and lag_val < 0:
@@ -286,6 +289,8 @@ def lead_lag_consensus(corr_lag: pd.DataFrame, gc_pval: pd.DataFrame,
             if i == j:
                 continue
             p = gc_pval.loc[i, j]
+            if isinstance(p, pd.Series):
+                p = p.iloc[0] if len(p) > 0 else np.nan
             if not np.isnan(p) and p < 0.05:
                 score.loc[i, j] += 1.0
 
@@ -295,6 +300,8 @@ def lead_lag_consensus(corr_lag: pd.DataFrame, gc_pval: pd.DataFrame,
             if i == j:
                 continue
             lag_val = irf_lag.loc[i, j]
+            if isinstance(lag_val, pd.Series):
+                lag_val = lag_val.iloc[0] if len(lag_val) > 0 else np.nan
             if not np.isnan(lag_val) and lag_val > 0:
                 score.loc[i, j] += 1.0 / (lag_val + 1)
             elif not np.isnan(lag_val) and lag_val < 0:
@@ -308,6 +315,8 @@ def lead_lag_consensus(corr_lag: pd.DataFrame, gc_pval: pd.DataFrame,
                 if i == j:
                     continue
                 te_val = te.loc[i, j]
+                if isinstance(te_val, pd.Series):
+                    te_val = te_val.iloc[0] if len(te_val) > 0 else np.nan
                 if not np.isnan(te_val):
                     score.loc[i, j] += te_val / te_max
 
