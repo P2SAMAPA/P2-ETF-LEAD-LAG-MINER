@@ -1,298 +1,314 @@
 """
-Lead-Lag Engine for ETF Temporal Asymmetry Detection
-Fixed to handle tickers with different data lengths (like SMH, SOXX, XLB)
+Core lead-lag analysis methods.
 """
-
-import numpy as np
 import pandas as pd
-from scipy.stats import pearsonr
+import numpy as np
+from scipy import stats
+from statsmodels.tsa.api import VAR
 from statsmodels.tsa.stattools import grangercausalitytests
-from statsmodels.tsa.vector_ar.var_model import VAR
-from sklearn.feature_selection import mutual_info_regression
 import warnings
-warnings.filterwarnings('ignore')
+
+warnings.filterwarnings("ignore")
+import config
+
+# Try to import pyinform, fallback to custom implementation if not available
+try:
+    from pyinform.transferentropy import transfer_entropy
+    PYINFORM_AVAILABLE = True
+except ImportError:
+    PYINFORM_AVAILABLE = False
+    print("Warning: pyinform not available. Using fallback transfer entropy implementation.")
 
 
-def cross_correlation_matrix(returns_df, max_lag=5, min_obs=30):
+def cross_correlation_matrix(returns: pd.DataFrame, max_lag: int = 10) -> tuple:
     """
-    Compute cross-correlation at various lags between all ETF pairs.
-    FIXED: Handles NaN values and different series lengths gracefully.
-    
-    Args:
-        returns_df: DataFrame of returns (rows=dates, columns=tickers)
-        max_lag: Maximum lag to test
-        min_obs: Minimum observations required for correlation calculation
-        
+    Compute maximum absolute cross-correlation and corresponding lag for all pairs.
     Returns:
-        corr_matrix: DataFrame of max correlations
-        corr_lag_matrix: DataFrame of lags at which max correlation occurs
+        corr_matrix: DataFrame of max correlation values
+        lag_matrix: DataFrame of lag (positive means row leads column)
+    FIXED: Handles different series lengths and NaN values.
     """
-    tickers = returns_df.columns
-    n = len(tickers)
-    
-    corr_matrix = pd.DataFrame(np.eye(n), index=tickers, columns=tickers)
-    corr_lag_matrix = pd.DataFrame(np.zeros((n, n)), index=tickers, columns=tickers)
-    
-    for i in range(n):
-        for j in range(n):
+    n = len(returns.columns)
+    tickers = [col.replace("_ret", "") for col in returns.columns]
+    corr_matrix = pd.DataFrame(index=tickers, columns=tickers, dtype=float)
+    lag_matrix = pd.DataFrame(index=tickers, columns=tickers, dtype=int)
+
+    for i, col_i in enumerate(returns.columns):
+        for j, col_j in enumerate(returns.columns):
             if i == j:
+                corr_matrix.iloc[i, j] = 1.0
+                lag_matrix.iloc[i, j] = 0
                 continue
-                
+
             # FIX: Get clean series, drop NaNs
-            series_i = returns_df.iloc[:, i].dropna()
-            series_j = returns_df.iloc[:, j].dropna()
+            series_i = returns[col_i].dropna().values
+            series_j = returns[col_j].dropna().values
             
-            # FIX: Align indices to ensure same dates
-            common_idx = series_i.index.intersection(series_j.index)
-            if len(common_idx) < min_obs:
-                # Not enough overlapping data - skip
+            # FIX: Check for minimum length
+            if len(series_i) < 50 or len(series_j) < 50:
                 corr_matrix.iloc[i, j] = np.nan
-                corr_lag_matrix.iloc[i, j] = np.nan
+                lag_matrix.iloc[i, j] = 0
                 continue
-                
-            series_i = series_i.loc[common_idx]
-            series_j = series_j.loc[common_idx]
-            
-            max_corr = -np.inf
+
+            max_corr = 0.0
             best_lag = 0
-            
-            # Check positive lags (i leads j)
+
+            # FIX: Align lengths for each lag calculation
+            # Check i leading j (i at t-lag, j at t)
             for lag in range(1, max_lag + 1):
-                if len(series_i) <= lag:
-                    break
-                    
-                # FIX: Ensure both segments have same length
-                len_i = len(series_i) - lag
-                len_j = len(series_j) - lag
-                
+                if len(series_i) <= lag or len(series_j) <= lag:
+                    continue
                 # FIX: Use min length to avoid size mismatch
-                min_len = min(len_i, len_j)
-                if min_len < min_obs:
-                    break
-                    
-                seg_i = series_i.iloc[:min_len]
-                seg_j = series_j.iloc[lag:lag+min_len]
-                
+                min_len = min(len(series_i) - lag, len(series_j) - lag)
+                if min_len < 10:
+                    continue
+                seg_i = series_i[:min_len]
+                seg_j = series_j[lag:lag+min_len]
                 try:
-                    # FIX: Use pearsonr which handles edge cases better
-                    corr, _ = pearsonr(seg_i, seg_j)
-                except (ValueError, RuntimeError):
-                    corr = np.nan
-                    
-                if not np.isnan(corr) and abs(corr) > abs(max_corr):
-                    max_corr = corr
-                    best_lag = lag
-            
-            # Check negative lags (j leads i)
+                    corr = np.corrcoef(seg_i, seg_j)[0, 1]
+                    if not np.isnan(corr) and abs(corr) > abs(max_corr):
+                        max_corr = corr
+                        best_lag = lag
+                except:
+                    continue
+
+            # Check j leading i (j at t-lag, i at t)
             for lag in range(1, max_lag + 1):
-                if len(series_j) <= lag:
-                    break
-                    
-                len_i = len(series_i) - lag
-                len_j = len(series_j) - lag
-                
-                min_len = min(len_i, len_j)
-                if min_len < min_obs:
-                    break
-                    
-                seg_i = series_i.iloc[lag:lag+min_len]
-                seg_j = series_j.iloc[:min_len]
-                
+                if len(series_j) <= lag or len(series_i) <= lag:
+                    continue
+                min_len = min(len(series_j) - lag, len(series_i) - lag)
+                if min_len < 10:
+                    continue
+                seg_j = series_j[:min_len]
+                seg_i = series_i[lag:lag+min_len]
                 try:
-                    corr, _ = pearsonr(seg_i, seg_j)
-                except (ValueError, RuntimeError):
-                    corr = np.nan
-                    
-                if not np.isnan(corr) and abs(corr) > abs(max_corr):
-                    max_corr = corr
-                    best_lag = -lag
-            
-            corr_matrix.iloc[i, j] = max_corr if max_corr != -np.inf else np.nan
-            corr_lag_matrix.iloc[i, j] = best_lag
-    
-    return corr_matrix, corr_lag_matrix
+                    corr = np.corrcoef(seg_j, seg_i)[0, 1]
+                    if not np.isnan(corr) and abs(corr) > abs(max_corr):
+                        max_corr = corr
+                        best_lag = -lag  # negative lag indicates column leads row
+                except:
+                    continue
+
+            corr_matrix.iloc[i, j] = max_corr
+            lag_matrix.iloc[i, j] = best_lag
+
+    return corr_matrix, lag_matrix
 
 
-def granger_causality_matrix(returns_df, max_lag=5, significance=0.05):
+def granger_causality_matrix(returns: pd.DataFrame, max_lag: int = 10) -> pd.DataFrame:
     """
-    Compute Granger causality p-values between all ETF pairs.
+    Test Granger causality for all pairs at each lag.
+    Returns DataFrame of min p-value across lags for each pair (row causes column).
     FIXED: Handles tickers with insufficient data.
     """
-    tickers = returns_df.columns
-    n = len(tickers)
-    
-    p_matrix = pd.DataFrame(np.ones((n, n)), index=tickers, columns=tickers)
-    
-    for i in range(n):
-        for j in range(n):
+    n = len(returns.columns)
+    tickers = [col.replace("_ret", "") for col in returns.columns]
+    pval_matrix = pd.DataFrame(index=tickers, columns=tickers, dtype=float)
+
+    for i, col_i in enumerate(returns.columns):
+        for j, col_j in enumerate(returns.columns):
             if i == j:
+                pval_matrix.iloc[i, j] = 1.0
                 continue
-                
-            # FIX: Get clean data with overlapping dates
-            series_i = returns_df.iloc[:, i].dropna()
-            series_j = returns_df.iloc[:, j].dropna()
-            
-            common_idx = series_i.index.intersection(series_j.index)
-            if len(common_idx) < 30:  # Minimum for Granger test
+
+            # FIX: Get overlapping data only
+            data = returns[[col_j, col_i]].dropna()
+            if len(data) < 50:
+                pval_matrix.iloc[i, j] = np.nan
                 continue
-                
-            # FIX: Ensure enough data for max_lag
-            if len(common_idx) < 3 * max_lag + 1:
-                # Use smaller max_lag if data is limited
-                adjusted_lag = max(1, len(common_idx) // 10)
-            else:
-                adjusted_lag = max_lag
-                
+
+            # FIX: Adjust max_lag based on data length
+            adjusted_lag = min(max_lag, len(data) // 10)
+            if adjusted_lag < 1:
+                pval_matrix.iloc[i, j] = np.nan
+                continue
+
             try:
-                data = pd.DataFrame({
-                    'i': series_i.loc[common_idx],
-                    'j': series_j.loc[common_idx]
-                }).dropna()
-                
-                # Run Granger test with adjusted lag
-                test_result = grangercausalitytests(data[['i', 'j']], 
-                                                    maxlag=adjusted_lag, 
-                                                    verbose=False)
-                
-                # Extract best p-value (min across lags)
-                best_p = 1.0
+                gc_res = grangercausalitytests(data, maxlag=adjusted_lag, verbose=False)
+                min_p = 1.0
                 for lag in range(1, adjusted_lag + 1):
-                    p_val = test_result[lag][0]['ssr_ftest'][1]
-                    best_p = min(best_p, p_val)
-                
-                p_matrix.iloc[i, j] = best_p
-                
-            except (ValueError, IndexError, KeyError):
-                # FIX: Skip problematic pairs
-                continue
-    
-    return p_matrix
+                    pval = gc_res[lag][0]["ssr_ftest"][1]
+                    if pval < min_p:
+                        min_p = pval
+                pval_matrix.iloc[i, j] = min_p
+            except:
+                pval_matrix.iloc[i, j] = np.nan
+
+    return pval_matrix
 
 
-def var_impulse_response(returns_df, n_lags=3, n_periods=10):
+def var_impulse_response_leadlag(returns: pd.DataFrame, max_lag: int = 10) -> pd.DataFrame:
     """
-    Compute VAR impulse response functions.
+    Fit VAR and compute orthogonalized impulse response peak lag for each pair.
+    Returns DataFrame of lag (positive means row shock affects column).
     FIXED: Handles missing data and short histories.
     """
-    # FIX: Drop any columns with all NaN
-    clean_df = returns_df.dropna(axis=1, how='all')
+    n = len(returns.columns)
+    tickers = [col.replace("_ret", "") for col in returns.columns]
+    irf_matrix = pd.DataFrame(index=tickers, columns=tickers, dtype=int)
+
+    # FIX: Drop any columns with all NaN and fill remaining
+    clean_returns = returns.dropna(axis=1, how='all')
+    if clean_returns.empty:
+        irf_matrix[:] = 0
+        return irf_matrix
     
-    # FIX: Fill remaining NaNs with median to keep VAR stable
-    clean_df = clean_df.fillna(clean_df.median())
+    clean_returns = clean_returns.fillna(clean_returns.median())
     
     # FIX: Check if we have enough data
-    if len(clean_df) < n_lags * 3:
-        print(f"Warning: Not enough data for VAR (need {n_lags*3}, have {len(clean_df)})")
-        return None, None
-    
+    if len(clean_returns) < 50:
+        irf_matrix[:] = 0
+        return irf_matrix
+
     try:
-        model = VAR(clean_df)
-        results = model.fit(maxlags=n_lags, ic='aic', verbose=False)
-        irf = results.irf(periods=n_periods)
-        
-        # FIX: Handle potential errors in irf
-        try:
-            irf_matrix = irf.irfs
-        except AttributeError:
-            irf_matrix = None
-            
-        return results, irf_matrix
-        
-    except (ValueError, np.linalg.LinAlgError, Exception) as e:
-        print(f"VAR estimation failed: {e}")
-        return None, None
+        model = VAR(clean_returns)
+        results = model.fit(maxlags=min(max_lag, len(clean_returns)//10, 5), ic="aic")
+        irf = results.irf(periods=min(max_lag, len(clean_returns)//10))
+        orth_irf = irf.orth_irfs
+
+        for i, shock_var in enumerate(tickers):
+            for j, resp_var in enumerate(tickers):
+                if i == j:
+                    irf_matrix.iloc[i, j] = 0
+                    continue
+                # FIX: Check dimensions
+                if i < orth_irf.shape[2] and j < orth_irf.shape[1]:
+                    response = orth_irf[:, j, i]
+                    peak_lag = np.argmax(np.abs(response))
+                    irf_matrix.iloc[i, j] = peak_lag
+                else:
+                    irf_matrix.iloc[i, j] = 0
+    except Exception as e:
+        print(f"VAR IRF failed: {e}")
+        irf_matrix[:] = 0
+
+    return irf_matrix
 
 
-def transfer_entropy_matrix(returns_df, max_lag=3, k=3):
+def transfer_entropy_fallback(source, target, lag=1):
     """
-    Compute transfer entropy between ETF pairs.
-    FIXED: Simplified version that handles different lengths.
+    Fallback transfer entropy approximation when pyinform is not available.
+    Uses correlation-based approximation.
     """
-    # FIX: Use mutual_info_regression as proxy for transfer entropy
-    # (more robust with different data lengths)
-    tickers = returns_df.columns
-    n = len(tickers)
+    if len(source) != len(target):
+        min_len = min(len(source), len(target))
+        source = source[:min_len]
+        target = target[:min_len]
     
-    te_matrix = pd.DataFrame(np.zeros((n, n)), index=tickers, columns=tickers)
+    if len(source) < 50:
+        return 0.0
     
-    for i in range(n):
-        for j in range(n):
+    # Compute correlation at the specified lag as proxy
+    try:
+        corr = np.corrcoef(source[:-lag], target[lag:])[0, 1]
+        if np.isnan(corr):
+            return 0.0
+        # Convert correlation to approximate mutual information
+        # Using -0.5 * log(1 - r^2) which is the Gaussian mutual information
+        r_squared = corr ** 2
+        if r_squared >= 1.0:
+            return 0.0
+        return -0.5 * np.log(1 - r_squared)
+    except:
+        return 0.0
+
+
+def transfer_entropy_matrix(returns: pd.DataFrame, lag: int = 1, n_shuffles: int = 100) -> pd.DataFrame:
+    """
+    Compute Effective Transfer Entropy (ETE) for all pairs at given lag.
+    Returns DataFrame of TE values (row -> column).
+    FIXED: Handles missing pyinform and data issues.
+    """
+    n = len(returns.columns)
+    tickers = [col.replace("_ret", "") for col in returns.columns]
+    te_matrix = pd.DataFrame(index=tickers, columns=tickers, dtype=float)
+
+    for i, source_col in enumerate(returns.columns):
+        source = returns[source_col].dropna().values
+        for j, target_col in enumerate(returns.columns):
             if i == j:
+                te_matrix.iloc[i, j] = 0.0
                 continue
-                
-            # FIX: Get overlapping data
-            series_i = returns_df.iloc[:, i].dropna()
-            series_j = returns_df.iloc[:, j].dropna()
+            target = returns[target_col].dropna().values
             
-            common_idx = series_i.index.intersection(series_j.index)
-            if len(common_idx) < 30:
+            # Align lengths
+            min_len = min(len(source), len(target))
+            if min_len < 50:
+                te_matrix.iloc[i, j] = np.nan
                 continue
-                
-            # FIX: Use lagged mutual information as proxy
+            src_aligned = source[:min_len]
+            tgt_aligned = target[:min_len]
+
             try:
-                X = series_i.loc[common_idx].values.reshape(-1, 1)
-                y = series_j.loc[common_idx].shift(-1).dropna().values
-                
-                if len(X) != len(y):
-                    min_len = min(len(X), len(y))
-                    X = X[:min_len]
-                    y = y[:min_len]
-                
-                # Normalize for better entropy estimation
-                X_norm = (X - X.mean()) / (X.std() + 1e-8)
-                y_norm = (y - y.mean()) / (y.std() + 1e-8)
-                
-                mi = mutual_info_regression(X_norm, y_norm, random_state=42)[0]
-                te_matrix.iloc[i, j] = max(0, mi)  # Mutual info is non-negative
-                
-            except Exception:
-                continue
-    
+                if PYINFORM_AVAILABLE:
+                    te = transfer_entropy(src_aligned, tgt_aligned, lag)
+                    # Effective TE via shuffling
+                    shuffled_tes = []
+                    for _ in range(min(n_shuffles, 30)):  # Fewer shuffles for speed
+                        shuffled = np.random.permutation(src_aligned)
+                        shuffled_tes.append(transfer_entropy(shuffled, tgt_aligned, lag))
+                    ete = te - np.mean(shuffled_tes)
+                    te_matrix.iloc[i, j] = max(ete, 0.0)
+                else:
+                    # Use fallback implementation
+                    te_matrix.iloc[i, j] = transfer_entropy_fallback(src_aligned, tgt_aligned, lag)
+            except Exception as e:
+                # Fallback on error
+                te_matrix.iloc[i, j] = transfer_entropy_fallback(src_aligned, tgt_aligned, lag)
+
     return te_matrix
 
 
-def compute_lead_lag_metrics(returns_df, max_lag=5):
+def lead_lag_consensus(corr_lag: pd.DataFrame, gc_pval: pd.DataFrame,
+                       irf_lag: pd.DataFrame, te: pd.DataFrame) -> pd.DataFrame:
     """
-    Compute all lead-lag metrics with proper error handling.
+    Combine multiple methods into a consensus lead-lag score.
+    Returns DataFrame with score (higher means row leads column).
+    FIXED: Handles NaN values gracefully.
     """
-    print("Computing cross-correlation matrix...")
-    corr_mat, lag_mat = cross_correlation_matrix(returns_df, max_lag=max_lag)
-    
-    print("Computing Granger causality...")
-    gc_mat = granger_causality_matrix(returns_df, max_lag=max_lag)
-    
-    print("Computing VAR impulse response...")
-    var_results, irf_mat = var_impulse_response(returns_df)
-    
-    print("Computing transfer entropy...")
-    te_mat = transfer_entropy_matrix(returns_df, max_lag=max_lag)
-    
-    return {
-        'correlation': corr_mat,
-        'lag': lag_mat,
-        'granger': gc_mat,
-        'var': var_results,
-        'irf': irf_mat,
-        'transfer_entropy': te_mat
-    }
+    tickers = corr_lag.index
+    score = pd.DataFrame(0.0, index=tickers, columns=tickers)
 
+    # Cross-correlation: sign of lag indicates direction
+    for i in tickers:
+        for j in tickers:
+            if i == j:
+                continue
+            lag_val = corr_lag.loc[i, j]
+            if not np.isnan(lag_val) and lag_val > 0:
+                score.loc[i, j] += 1.0
+            elif not np.isnan(lag_val) and lag_val < 0:
+                score.loc[j, i] += 1.0
 
-# FIX: Add a helper function to clean returns before analysis
-def clean_returns_for_analysis(returns_df, min_valid_obs=50):
-    """
-    Remove tickers with insufficient data and align dates.
-    """
-    # Drop columns with too few non-NaN values
-    valid_cols = returns_df.columns[returns_df.count() >= min_valid_obs]
-    clean_df = returns_df[valid_cols].copy()
-    
-    # Drop rows where all values are NaN
-    clean_df = clean_df.dropna(how='all')
-    
-    # Forward fill missing values (carry last observation forward)
-    clean_df = clean_df.fillna(method='ffill').fillna(method='bfill')
-    
-    print(f"Cleaned data: {len(clean_df)} rows, {len(clean_df.columns)} tickers")
-    print(f"Removed tickers: {set(returns_df.columns) - set(clean_df.columns)}")
-    
-    return clean_df
+    # Granger causality: lower p-value => stronger evidence
+    for i in tickers:
+        for j in tickers:
+            if i == j:
+                continue
+            p = gc_pval.loc[i, j]
+            if not np.isnan(p) and p < 0.05:
+                score.loc[i, j] += 1.0
+
+    # VAR IRF: shorter lag => stronger immediate impact
+    for i in tickers:
+        for j in tickers:
+            if i == j:
+                continue
+            lag_val = irf_lag.loc[i, j]
+            if not np.isnan(lag_val) and lag_val > 0:
+                score.loc[i, j] += 1.0 / (lag_val + 1)
+            elif not np.isnan(lag_val) and lag_val < 0:
+                score.loc[j, i] += 1.0 / (abs(lag_val) + 1)
+
+    # Transfer Entropy: higher TE => stronger information flow
+    te_max = te.values.max()
+    if not np.isnan(te_max) and te_max > 0:
+        for i in tickers:
+            for j in tickers:
+                if i == j:
+                    continue
+                te_val = te.loc[i, j]
+                if not np.isnan(te_val):
+                    score.loc[i, j] += te_val / te_max
+
+    return score
